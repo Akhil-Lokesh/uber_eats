@@ -1,0 +1,242 @@
+/* Login Page Specific Styles */
+
+.login-container {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    background-image: url('https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?ixlib=rb-1.2.1&w=1800&q=80');
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+  }
+  
+  .login-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(to right, rgba(18, 18, 18, 0.9), rgba(18, 18, 18, 0.7));
+    z-index: 0;
+  }
+  
+  .glass-card {
+    background-color: rgba(26, 26, 26, 0.85);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1), 0 8px 12px rgba(0, 0, 0, 0.1), 0 16px 24px rgba(0, 0, 0, 0.1);
+    position: relative;
+    z-index: 1;
+  }
+  
+  /* Logo */
+  .logo {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+  
+  .logo span {
+    font-weight: 700;
+    font-size: 1.75rem;
+    letter-spacing: -0.05em;
+    color: var(--primary-color);
+  }
+  
+  /* Auth Tabs */
+  .auth-tabs {
+    display: flex;
+    margin-bottom: 1.5rem;
+    background-color: var(--neutral-800);
+    border-radius: 12px;
+    padding: 0.25rem;
+  }
+  
+  .auth-tabs button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 0.75rem;
+    color: var(--neutral-200);
+    border-radius: 10px;
+    transition: all 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  
+  .auth-tabs button.active {
+    background-color: var(--primary-color);
+    color: var(--neutral-900);
+    font-weight: 500;
+  }
+  
+  /* Form Styling */
+  .form-label {
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    color: var(--neutral-200);
+  }
+  
+  .input-group {
+    position: relative;
+  }
+  
+  .input-group-text {
+    background-color: transparent;
+    border-color: transparent;
+    color: var(--neutral-300);
+    position: absolute;
+    z-index: 10;
+    top: 0;
+    left: 0;
+    height: 100%;
+  }
+  
+  .input-group .form-control {
+    padding-left: 2.5rem;
+    background-color: var(--neutral-600);
+    border: 1px solid var(--neutral-500);
+    color: var(--neutral-100);
+    border-radius: 12px;
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+    transition: all 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  
+  .input-group .form-control:focus {
+    background-color: var(--neutral-600);
+    border-color: var(--primary-color);
+    color: var(--neutral-100);
+    box-shadow: 0 0 0 0.25rem rgba(6, 193, 103, 0.25);
+  }
+  
+  .form-control::placeholder {
+    color: var(--neutral-300);
+  }
+  
+  /* Password Toggle Button */
+  .password-toggle-btn {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: none;
+    background: transparent;
+    color: var(--neutral-300);
+    z-index: 10;
+  }
+  
+  /* Remember Me Checkbox */
+  .form-check-input {
+    background-color: var(--neutral-600);
+    border-color: var(--neutral-500);
+  }
+  
+  .form-check-input:checked {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+  }
+  
+  .form-check-label {
+    color: var(--neutral-200);
+  }
+  
+  /* Divider Styling */
+  .divider {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    margin: 1.5rem 0;
+    color: var(--neutral-300);
+  }
+  
+  .divider::before,
+  .divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid var(--neutral-500);
+  }
+  
+  .divider::before {
+    margin-right: .75rem;
+  }
+  
+  .divider::after {
+    margin-left: .75rem;
+  }
+  
+  /* Social Login Buttons */
+  .social-login-btn {
+    background-color: var(--neutral-600);
+    border: 1px solid var(--neutral-500);
+    color: var(--neutral-100);
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: all 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+    font-weight: 500;
+    margin-bottom: 1rem;
+  }
+  
+  .social-login-btn:hover {
+    background-color: var(--neutral-500);
+    transform: translateY(-2px);
+  }
+  
+  /* Button Styling */
+  .btn-primary {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+    color: var(--neutral-900);
+    font-weight: 500;
+    border-radius: 50px;
+    padding: 0.5rem 1.25rem;
+    transition: all 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+    letter-spacing: 0.01em;
+  }
+  
+  .btn-primary:hover {
+    background-color: var(--primary-light);
+    border-color: var(--primary-light);
+    color: var(--neutral-900);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  }
+  
+  /* Alert Styling */
+  .alert {
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border: none;
+  }
+  
+  .alert-danger {
+    background-color: rgba(239, 68, 68, 0.15);
+    color: var(--danger);
+  }
+  
+  /* Animation */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  
+  .fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+  }
+  
+  /* Responsive Adjustments */
+  @media (max-width: 576px) {
+    .glass-card {
+      padding: 1.5rem !important;
+    }
+    
+    .logo span {
+      font-size: 1.5rem;
+    }
+  }
