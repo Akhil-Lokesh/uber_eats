@@ -22,7 +22,7 @@ npm start
 ```
 cd UberEATS-Backend
 npm install
-npm start
+node server.js
 ```
 
 ## Environment Variables
