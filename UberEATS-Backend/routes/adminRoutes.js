@@ -1,200 +1,278 @@
-const express = require("express");
-const db = require("../config/db");
-const router = express.Router();
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const { verifyToken, requireSuperAdmin, logout, blacklistedTokens } = require("../middleware/authMiddleware");
+/**
+ * Admin Routes
+ * Admin dashboard, order management, and user management
+ */
 
-// ✅ Function to log admin actions
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const { validationResult } = require('express-validator');
+const db = require('../config/db');
+const logger = require('../utils/logger');
+const { successResponse, errorResponse, validationErrorResponse } = require('../utils/responseFormatter');
+const { idParamValidation } = require('../utils/validators');
+const { verifyToken, requireAdmin, requireSuperAdmin, blacklistToken } = require('../middleware/authMiddleware');
+const { asyncHandler } = require('../utils/errorHandler');
+
+const router = express.Router();
+
+/**
+ * Log admin actions
+ */
 const logAdminAction = async (admin_email, action, target_user_id = null) => {
   try {
     await db.execute(
-      "INSERT INTO admin_logs (admin_email, action, target_user_id) VALUES (?, ?, ?)", 
+      'INSERT INTO admin_logs (admin_email, action, target_user_id) VALUES (?, ?, ?)',
       [admin_email, action, target_user_id]
     );
   } catch (error) {
-    console.error("❌ Error logging admin action:", error);
+    logger.error('Error logging admin action', { error: error.message });
   }
 };
 
-// ✅ Admin Dashboard (JWT Protected)
-router.get("/dashboard", verifyToken, async (req, res) => {
-  try {
-    // ✅ Ensure token is not blacklisted
-    const token = req.headers.authorization.split(" ")[1];
-    if (blacklistedTokens.has(token)) {
-      console.log("❌ Attempt to access dashboard with blacklisted token.");
-      return res.status(403).json({ error: "Forbidden: Token is invalid or expired!" });
-    }
+/**
+ * @route   GET /api/admin/dashboard
+ * @desc    Get admin dashboard statistics
+ * @access  Private (Admin)
+ */
+router.get('/dashboard', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
+  const [totalOrders] = await db.execute('SELECT COUNT(*) AS total_orders FROM orders');
+  const [totalRevenue] = await db.execute('SELECT IFNULL(SUM(total_price), 0) AS total_revenue FROM orders');
+  const [totalUsers] = await db.execute('SELECT COUNT(*) AS total_users FROM users');
+  const [totalRestaurants] = await db.execute('SELECT COUNT(*) AS total_restaurants FROM restaurants');
 
-    console.log(`✅ Admin ${req.user.email} is fetching dashboard stats`);
+  const [topRestaurants] = await db.execute(`
+    SELECT r.name AS restaurant_name, COUNT(o.id) AS order_count, SUM(o.total_price) AS revenue
+    FROM orders o
+    JOIN restaurants r ON o.restaurant_id = r.id
+    GROUP BY r.id
+    ORDER BY order_count DESC
+    LIMIT 5
+  `);
 
-    const [totalOrders] = await db.execute("SELECT COUNT(*) AS total_orders FROM orders");
-    const [totalRevenue] = await db.execute("SELECT IFNULL(SUM(total_price), 0) AS total_revenue FROM orders");
+  const [recentOrders] = await db.execute(`
+    SELECT o.id, o.status, o.total_price, o.created_at,
+           u.name AS customer_name, r.name AS restaurant_name
+    FROM orders o
+    JOIN users u ON o.customer_id = u.id
+    JOIN restaurants r ON o.restaurant_id = r.id
+    ORDER BY o.created_at DESC
+    LIMIT 10
+  `);
 
-    const [topRestaurants] = await db.execute(`
-      SELECT r.name AS restaurant_name, COUNT(o.id) AS order_count
-      FROM orders o
-      JOIN restaurants r ON o.restaurant_id = r.id
-      GROUP BY r.id
-      ORDER BY order_count DESC
-      LIMIT 5
-    `);
+  logger.info('Admin dashboard accessed', { adminEmail: req.user.email });
 
-    res.json({
+  return successResponse(res, {
+    statistics: {
       total_orders: totalOrders[0].total_orders,
-      total_revenue: totalRevenue[0].total_revenue,
-      top_restaurants: topRestaurants,
-    });
-  } catch (error) {
-    console.error("Error fetching dashboard stats:", error);
-    res.status(500).json({ error: "Server error!" });
+      total_revenue: parseFloat(totalRevenue[0].total_revenue).toFixed(2),
+      total_users: totalUsers[0].total_users,
+      total_restaurants: totalRestaurants[0].total_restaurants
+    },
+    top_restaurants: topRestaurants,
+    recent_orders: recentOrders
+  });
+}));
+
+/**
+ * @route   POST /api/admin/logout
+ * @desc    Admin logout
+ * @access  Private (Admin)
+ */
+router.post('/logout', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
+  await blacklistToken(req.token, req.user.id);
+  logger.info('Admin logged out', { adminEmail: req.user.email });
+  return successResponse(res, null, 'Logout successful');
+}));
+
+/**
+ * @route   PUT /api/admin/orders/:id
+ * @desc    Update order status (Super Admin only)
+ * @access  Private (Super Admin)
+ */
+router.put('/orders/:id', verifyToken, requireSuperAdmin, idParamValidation, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return validationErrorResponse(res, errors.array());
   }
-});
 
+  const { status } = req.body;
+  const order_id = req.params.id;
 
-// ✅ Logout (Blacklist Token)
-router.post("/logout", verifyToken, async (req, res) => {
-  try {
-    const token = req.headers.authorization.split(" ")[1];
-    blacklistedTokens.add(token); // ✅ Blacklist the token
-    console.log(`🔹 Token blacklisted: ${token}`);
-
-    res.json({ message: "Logout successful! Token invalidated." });
-  } catch (error) {
-    console.error("❌ Error in logout:", error);
-    res.status(500).json({ error: "Server error!" });
+  const validStatuses = ['Pending', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled'];
+  if (!validStatuses.includes(status)) {
+    return errorResponse(res, 'Invalid status value', 400);
   }
-});
 
-// ✅ Update Order Status (Super Admin Only)
-router.put("/orders/:id", verifyToken, requireSuperAdmin, async (req, res) => {
-  try {
-    const { status } = req.body;
-    const order_id = req.params.id;
+  const [order] = await db.execute('SELECT id FROM orders WHERE id = ?', [order_id]);
 
-    console.log(`🔹 Super Admin ${req.user.email} updating order_id=${order_id} to status=${status}`);
-
-    if (!["Pending", "Preparing", "Delivered", "Cancelled"].includes(status)) {
-      return res.status(400).json({ error: "Invalid status value!" });
-    }
-
-    const checkQuery = "SELECT * FROM orders WHERE id = ?";
-    const [order] = await db.execute(checkQuery, [order_id]);
-
-    if (order.length === 0) {
-      return res.status(404).json({ error: "Order not found!" });
-    }
-
-    await db.execute("UPDATE orders SET status = ? WHERE id = ?", [status, order_id]);
-
-    await logAdminAction(req.user.email, `Updated Order Status to ${status}`, order_id);
-    res.json({ message: `Order updated to ${status} successfully!` });
-  } catch (error) {
-    console.error("❌ Error updating order status:", error);
-    res.status(500).json({ error: "Server error!" });
+  if (order.length === 0) {
+    return errorResponse(res, 'Order not found', 404);
   }
-});
 
-// ✅ Delete Order (Super Admin Only)
-router.delete("/orders/:id", verifyToken, requireSuperAdmin, async (req, res) => {
-  try {
-    const order_id = req.params.id;
-    console.log(`🛑 Super Admin ${req.user.email} is attempting to delete order_id=${order_id}`);
+  await db.execute('UPDATE orders SET status = ? WHERE id = ?', [status, order_id]);
+  await logAdminAction(req.user.email, `Updated Order Status to ${status}`, order_id);
 
-    const checkQuery = "SELECT id FROM orders WHERE id = ?";
-    const [order] = await db.execute(checkQuery, [order_id]);
+  logger.info('Order status updated by admin', { adminEmail: req.user.email, orderId: order_id, status });
 
-    if (order.length === 0) {
-      return res.status(404).json({ error: "Order not found!" });
-    }
+  return successResponse(res, null, `Order status updated to ${status}`);
+}));
 
-    await db.execute("DELETE FROM orders WHERE id = ?", [order_id]);
-    console.log(`✅ Order ID ${order_id} deleted successfully!`);
-    res.json({ message: `Order ID ${order_id} deleted successfully!` });
-  } catch (error) {
-    console.error("❌ Error deleting order:", error);
-    res.status(500).json({ error: "Server error! Please try again later." });
+/**
+ * @route   DELETE /api/admin/orders/:id
+ * @desc    Delete order (Super Admin only)
+ * @access  Private (Super Admin)
+ */
+router.delete('/orders/:id', verifyToken, requireSuperAdmin, idParamValidation, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return validationErrorResponse(res, errors.array());
   }
-});
 
-// ✅ Fetch Admin Profile
-router.get("/profile", verifyToken, async (req, res) => {
-  try {
-    let targetEmail = req.user.email;
+  const order_id = req.params.id;
 
-    if (req.user.role === "super_admin" && req.query.email) {
-      console.log(`🔹 Super Admin fetching profile for: ${req.query.email}`);
-      targetEmail = req.query.email;
-    } else if (req.query.email && req.query.email !== req.user.email) {
-      return res.status(403).json({ error: "Forbidden: Admins cannot fetch another admin's profile!" });
-    }
+  const [order] = await db.execute('SELECT id FROM orders WHERE id = ?', [order_id]);
 
-    const [admin] = await db.execute("SELECT id, email, role FROM admins WHERE email = ?", [targetEmail]);
-
-    if (admin.length === 0) {
-      return res.status(404).json({ error: "Admin profile not found!" });
-    }
-
-    res.json(admin[0]);
-  } catch (error) {
-    console.error("❌ Error fetching admin profile:", error);
-    res.status(500).json({ error: "Server error!" });
+  if (order.length === 0) {
+    return errorResponse(res, 'Order not found', 404);
   }
-});
 
-// ✅ Get Admin Logs (Super Admin Only)
-router.get("/logs", verifyToken, requireSuperAdmin, async (req, res) => {
-  try {
-    console.log(`Super Admin ${req.user.email} is viewing logs`);
+  await db.execute('DELETE FROM orders WHERE id = ?', [order_id]);
+  await logAdminAction(req.user.email, `Deleted Order`, order_id);
 
-    const query = `
-      SELECT id, admin_email, action, target_user_id, timestamp 
-      FROM admin_logs 
-      ORDER BY timestamp DESC
-      LIMIT 50
-    `;
+  logger.info('Order deleted by admin', { adminEmail: req.user.email, orderId: order_id });
 
-    const [logs] = await db.execute(query);
+  return successResponse(res, null, 'Order deleted successfully');
+}));
 
-    if (logs.length === 0) {
-      console.log(`❌ No logs found in the database.`);
-      return res.status(404).json({ error: "No logs found!" });
-    }
+/**
+ * @route   GET /api/admin/profile
+ * @desc    Get admin profile
+ * @access  Private (Admin)
+ */
+router.get('/profile', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
+  let targetEmail = req.user.email;
 
-    res.json(logs);
-  } catch (error) {
-    console.error("❌ Error fetching logs:", error);
-    res.status(500).json({ error: "Server error!" });
+  // Super admins can view other admin profiles
+  if (req.user.role === 'super_admin' && req.query.email) {
+    targetEmail = req.query.email;
+  } else if (req.query.email && req.query.email !== req.user.email) {
+    return errorResponse(res, 'Access denied - cannot view other admin profiles', 403);
   }
-});
 
+  const [admin] = await db.execute(
+    'SELECT id, email, role, created_at FROM admins WHERE email = ?',
+    [targetEmail]
+  );
 
-// ✅ Create a New User (Super Admin Only)
-router.post("/users", verifyToken, requireSuperAdmin, async (req, res) => {
-  try {
-    const { name, email, password, role } = req.body;
-    console.log(`Super Admin ${req.user.email} is creating a new user: ${email}`);
-
-    if (!name || !email || !password || !role) {
-      return res.status(400).json({ error: "All fields are required!" });
-    }
-
-    const checkQuery = "SELECT id FROM users WHERE email = ?";
-    const [existingUser] = await db.execute(checkQuery, [email]);
-
-    if (existingUser.length > 0) {
-      return res.status(400).json({ error: "Email already registered!" });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await db.execute("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)", [name, email, hashedPassword, role]);
-
-    res.status(201).json({ message: "User created successfully!" });
-  } catch (error) {
-    console.error("❌ Error creating user:", error);
-    res.status(500).json({ error: "Server error!" });
+  if (admin.length === 0) {
+    return errorResponse(res, 'Admin profile not found', 404);
   }
-});
+
+  return successResponse(res, { admin: admin[0] });
+}));
+
+/**
+ * @route   GET /api/admin/logs
+ * @desc    Get admin action logs (Super Admin only)
+ * @access  Private (Super Admin)
+ */
+router.get('/logs', verifyToken, requireSuperAdmin, asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  const offset = parseInt(req.query.offset) || 0;
+
+  const [logs] = await db.execute(
+    `SELECT id, admin_email, action, target_user_id, timestamp
+     FROM admin_logs
+     ORDER BY timestamp DESC
+     LIMIT ? OFFSET ?`,
+    [limit, offset]
+  );
+
+  const [total] = await db.execute('SELECT COUNT(*) as count FROM admin_logs');
+
+  logger.info('Admin logs accessed', { adminEmail: req.user.email });
+
+  return successResponse(res, {
+    logs,
+    total: total[0].count,
+    limit,
+    offset
+  });
+}));
+
+/**
+ * @route   POST /api/admin/users
+ * @desc    Create new user (Super Admin only)
+ * @access  Private (Super Admin)
+ */
+router.post('/users', verifyToken, requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { name, email, password, role } = req.body;
+
+  if (!name || !email || !password || !role) {
+    return errorResponse(res, 'All fields are required', 400);
+  }
+
+  if (!['customer', 'restaurant'].includes(role)) {
+    return errorResponse(res, 'Invalid role. Must be customer or restaurant', 400);
+  }
+
+  // Check if user exists
+  const [existing] = await db.execute('SELECT id FROM users WHERE email = ?', [email]);
+
+  if (existing.length > 0) {
+    return errorResponse(res, 'Email already registered', 409);
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+  const [result] = await db.execute(
+    'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
+    [name, email, hashedPassword, role]
+  );
+
+  await logAdminAction(req.user.email, `Created new user: ${email}`, result.insertId);
+
+  logger.info('User created by admin', { adminEmail: req.user.email, newUserEmail: email, role });
+
+  return successResponse(res, {
+    user: {
+      id: result.insertId,
+      name,
+      email,
+      role
+    }
+  }, 'User created successfully', 201);
+}));
+
+/**
+ * @route   GET /api/admin/users
+ * @desc    Get all users (Super Admin only)
+ * @access  Private (Super Admin)
+ */
+router.get('/users', verifyToken, requireSuperAdmin, asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  const offset = parseInt(req.query.offset) || 0;
+  const role = req.query.role;
+
+  let query = 'SELECT id, name, email, role, created_at FROM users WHERE 1=1';
+  const params = [];
+
+  if (role && ['customer', 'restaurant'].includes(role)) {
+    query += ' AND role = ?';
+    params.push(role);
+  }
+
+  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+
+  const [users] = await db.execute(query, params);
+  const [total] = await db.execute('SELECT COUNT(*) as count FROM users');
+
+  return successResponse(res, {
+    users,
+    total: total[0].count,
+    limit,
+    offset
+  });
+}));
 
 module.exports = router;

@@ -1,155 +1,249 @@
-const express = require("express");
-const Order = require("../models/Order");
-const db = require("../config/db");
-const Dish = require("../models/Dish");
+/**
+ * Order Routes
+ * Handles order placement, tracking, and feedback
+ */
+
+const express = require('express');
+const { validationResult } = require('express-validator');
+const Order = require('../models/Order');
+const db = require('../config/db');
+const logger = require('../utils/logger');
+const { successResponse, errorResponse, validationErrorResponse } = require('../utils/responseFormatter');
+const { orderValidation, feedbackValidation, idParamValidation } = require('../utils/validators');
+const { verifyToken, requireCustomer, requireRestaurant } = require('../middleware/authMiddleware');
+const { asyncHandler } = require('../utils/errorHandler');
+
 const router = express.Router();
 
-// Middleware to ensure authentication for customers
-const customerAuth = (req, res, next) => {
-  if (!req.session.user) {
-    return res.status(401).json({ error: "Unauthorized: Please log in!" });
+/**
+ * @route   POST /api/orders
+ * @desc    Place a new order
+ * @access  Private (Customer)
+ */
+router.post('/', verifyToken, requireCustomer, orderValidation, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return validationErrorResponse(res, errors.array());
   }
-  next();
-};
 
-// Middleware to ensure authentication for restaurants
-const restaurantAuth = (req, res, next) => {
-  if (!req.session.restaurant) {
-    return res.status(401).json({ error: "Unauthorized: Please log in!" });
+  const { restaurantId, items, totalPrice, deliveryAddress, deliveryPhone, notes } = req.body;
+  const customer_id = req.user.id;
+
+  // Verify all dishes exist and belong to the restaurant
+  const dishIds = items.map(item => item.dishId);
+  const placeholders = dishIds.map(() => '?').join(',');
+
+  const [dishes] = await db.execute(
+    `SELECT id, price, restaurant_id, name FROM dishes
+     WHERE id IN (${placeholders}) AND restaurant_id = ?`,
+    [...dishIds, restaurantId]
+  );
+
+  if (dishes.length !== items.length) {
+    return errorResponse(res, 'Some dishes are invalid or not available', 400);
   }
-  next();
-};
 
-// ✅ Place a new order
-router.post("/", customerAuth, async (req, res) => {
-  try {
-    const { dish_id, quantity } = req.body;
-    const customer_id = req.session.user.id;
+  // Verify prices
+  const dishMap = {};
+  dishes.forEach(d => { dishMap[d.id] = d; });
 
-    console.log(`Placing order: customer_id=${customer_id}, dish_id=${dish_id}, quantity=${quantity}`);
-
-    // Get dish details
-    const dishQuery = "SELECT price, restaurant_id FROM dishes WHERE id = ?";
-    const [dishRows] = await db.execute(dishQuery, [dish_id]);
-
-    if (dishRows.length === 0) {
-      return res.status(404).json({ error: "Dish not found!" });
+  let calculatedTotal = 0;
+  for (const item of items) {
+    const dish = dishMap[item.dishId];
+    if (!dish) {
+      return errorResponse(res, `Dish ID ${item.dishId} not found`, 400);
     }
 
-    const { price, restaurant_id } = dishRows[0];
-    const total_price = price * quantity;
+    const expectedPrice = parseFloat(dish.price);
+    const providedPrice = parseFloat(item.price);
 
-    await Order.create(customer_id, restaurant_id, dish_id, quantity, total_price);
-
-    res.status(201).json({ message: "Order placed successfully!" });
-  } catch (error) {
-    console.error("Error placing order:", error);
-    res.status(500).json({ error: "Server error!" });
-  }
-});
-
-// ✅ Get all orders for a customer
-router.get("/", customerAuth, async (req, res) => {
-  try {
-    const customer_id = req.session.user.id;
-    console.log(`Fetching orders for customer_id=${customer_id}`);
-    
-    const orders = await Order.getByCustomer(customer_id);
-    
-    res.json(orders);
-  } catch (error) {
-    console.error("Error fetching orders:", error);
-    res.status(500).json({ error: "Server error!" });
-  }
-});
-
-// ✅ Get order details by order ID (Only customer can track)
-router.get("/:id", customerAuth, async (req, res) => {
-  try {
-    const order_id = req.params.id;
-    const customer_id = req.session.user.id;
-
-    console.log(`Fetching details for order_id=${order_id} by customer_id=${customer_id}`);
-
-    const query = `
-      SELECT o.id, o.status, o.total_price, d.name AS dish_name, r.name AS restaurant_name
-      FROM orders o
-      JOIN dishes d ON o.dish_id = d.id
-      JOIN restaurants r ON o.restaurant_id = r.id
-      WHERE o.id = ? AND o.customer_id = ?
-    `;
-    
-    const [order] = await db.execute(query, [order_id, customer_id]);
-
-    if (order.length === 0) {
-      return res.status(404).json({ error: "Order not found or does not belong to you!" });
+    if (Math.abs(expectedPrice - providedPrice) > 0.01) {
+      return errorResponse(res, `Price mismatch for ${dish.name}. Please refresh and try again`, 400);
     }
 
-    res.json(order[0]);
-  } catch (error) {
-    console.error("Error fetching order details:", error);
-    res.status(500).json({ error: "Server error!" });
+    calculatedTotal += expectedPrice * item.quantity;
   }
-});
 
-// ✅ Submit Feedback for an Order
-router.post("/:id/feedback", customerAuth, async (req, res) => {
-  try {
-    const { rating, comment } = req.body;
-    const order_id = req.params.id;
-    const customer_id = req.session.user.id;
-
-    console.log(`Customer ${customer_id} submitting feedback for order ${order_id}`);
-
-    // Validate rating
-    if (!rating || rating < 1 || rating > 5) {
-      return res.status(400).json({ error: "Rating must be between 1 and 5!" });
-    }
-
-    // Ensure the order is completed before allowing feedback
-    const checkQuery = "SELECT * FROM orders WHERE id = ? AND customer_id = ? AND status = 'Delivered'";
-    const [order] = await db.execute(checkQuery, [order_id, customer_id]);
-
-    if (order.length === 0) {
-      return res.status(400).json({ error: "You can only review completed orders!" });
-    }
-
-    // Insert feedback into the database
-    const insertQuery = "INSERT INTO feedbacks (order_id, customer_id, rating, comment) VALUES (?, ?, ?, ?)";
-    await db.execute(insertQuery, [order_id, customer_id, rating, comment]);
-
-    res.status(201).json({ message: "Feedback submitted successfully!" });
-  } catch (error) {
-    console.error("Error submitting feedback:", error);
-    res.status(500).json({ error: "Server error!" });
+  // Verify total price
+  if (Math.abs(calculatedTotal - parseFloat(totalPrice)) > 0.01) {
+    return errorResponse(res, 'Total price mismatch. Please refresh and try again', 400);
   }
-});
 
-// ✅ Get Feedback for an Order
-router.get("/:id/feedback", async (req, res) => {
-  try {
-    const order_id = req.params.id;
+  const orderData = {
+    customer_id,
+    restaurant_id: restaurantId,
+    total_price: totalPrice,
+    delivery_address: deliveryAddress,
+    delivery_phone: deliveryPhone,
+    notes,
+    items
+  };
 
-    console.log(`Fetching feedback for order ${order_id}`);
+  const result = await Order.create(orderData);
 
-    const query = `
-      SELECT f.rating, f.comment, f.created_at, u.name AS customer_name
-      FROM feedbacks f
-      JOIN users u ON f.customer_id = u.id
-      WHERE f.order_id = ?
-    `;
+  logger.info('Order placed', { orderId: result.orderId, customerId: customer_id, restaurantId });
 
-    const [feedback] = await db.execute(query, [order_id]);
+  return successResponse(res, { orderId: result.orderId }, 'Order placed successfully', 201);
+}));
 
-    if (feedback.length === 0) {
-      return res.status(404).json({ error: "No feedback found for this order!" });
+/**
+ * @route   GET /api/orders
+ * @desc    Get all orders for current user
+ * @access  Private
+ */
+router.get('/', verifyToken, asyncHandler(async (req, res) => {
+  const { id, role } = req.user;
+
+  let orders;
+  if (role === 'customer') {
+    orders = await Order.getByCustomer(id);
+  } else if (role === 'restaurant') {
+    const [restaurants] = await db.execute('SELECT id FROM restaurants WHERE user_id = ?', [id]);
+    if (restaurants.length === 0) {
+      return errorResponse(res, 'Restaurant profile not found', 404);
     }
-
-    res.json(feedback);
-  } catch (error) {
-    console.error("Error fetching feedback:", error);
-    res.status(500).json({ error: "Server error!" });
+    orders = await Order.getByRestaurant(restaurants[0].id);
+  } else {
+    return errorResponse(res, 'Invalid user role', 403);
   }
-});
+
+  return successResponse(res, { orders, count: orders.length });
+}));
+
+/**
+ * @route   GET /api/orders/:id
+ * @desc    Get order details
+ * @access  Private
+ */
+router.get('/:id', verifyToken, idParamValidation, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return validationErrorResponse(res, errors.array());
+  }
+
+  const orderId = req.params.id;
+  const { id: userId, role } = req.user;
+
+  const order = role === 'customer'
+    ? await Order.getById(orderId, userId)
+    : await Order.getById(orderId);
+
+  if (!order) {
+    return errorResponse(res, 'Order not found or access denied', 404);
+  }
+
+  if (role === 'restaurant') {
+    const [restaurants] = await db.execute('SELECT id FROM restaurants WHERE user_id = ?', [userId]);
+    if (restaurants.length === 0 || restaurants[0].id !== order.restaurant_id) {
+      return errorResponse(res, 'Access denied', 403);
+    }
+  }
+
+  return successResponse(res, { order });
+}));
+
+/**
+ * @route   PUT /api/orders/:id/status
+ * @desc    Update order status
+ * @access  Private (Restaurant)
+ */
+router.put('/:id/status', verifyToken, requireRestaurant, idParamValidation, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return validationErrorResponse(res, errors.array());
+  }
+
+  const orderId = req.params.id;
+  const { status } = req.body;
+
+  const validStatuses = ['Pending', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled'];
+  if (!validStatuses.includes(status)) {
+    return errorResponse(res, 'Invalid status value', 400);
+  }
+
+  const order = await Order.getById(orderId);
+  if (!order) {
+    return errorResponse(res, 'Order not found', 404);
+  }
+
+  const [restaurants] = await db.execute('SELECT id FROM restaurants WHERE user_id = ?', [req.user.id]);
+  if (restaurants.length === 0 || restaurants[0].id !== order.restaurant_id) {
+    return errorResponse(res, 'Access denied', 403);
+  }
+
+  await Order.updateStatus(orderId, status);
+  logger.info('Order status updated', { orderId, status });
+
+  return successResponse(res, null, `Order status updated to ${status}`);
+}));
+
+/**
+ * @route   POST /api/orders/:id/feedback
+ * @desc    Submit feedback
+ * @access  Private (Customer)
+ */
+router.post('/:id/feedback', verifyToken, requireCustomer, idParamValidation, feedbackValidation, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return validationErrorResponse(res, errors.array());
+  }
+
+  const orderId = req.params.id;
+  const { rating, comment } = req.body;
+  const customerId = req.user.id;
+
+  const order = await Order.getById(orderId, customerId);
+  if (!order) {
+    return errorResponse(res, 'Order not found', 404);
+  }
+
+  if (order.status !== 'Delivered') {
+    return errorResponse(res, 'Can only review delivered orders', 400);
+  }
+
+  const [existing] = await db.execute(
+    'SELECT id FROM feedbacks WHERE order_id = ? AND customer_id = ?',
+    [orderId, customerId]
+  );
+
+  if (existing.length > 0) {
+    return errorResponse(res, 'Feedback already submitted', 409);
+  }
+
+  await db.execute(
+    'INSERT INTO feedbacks (order_id, customer_id, restaurant_id, rating, comment) VALUES (?, ?, ?, ?, ?)',
+    [orderId, customerId, order.restaurant_id, rating, comment || null]
+  );
+
+  logger.info('Feedback submitted', { orderId, rating });
+
+  return successResponse(res, null, 'Feedback submitted successfully', 201);
+}));
+
+/**
+ * @route   GET /api/orders/:id/feedback
+ * @desc    Get feedback for an order
+ * @access  Public
+ */
+router.get('/:id/feedback', idParamValidation, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return validationErrorResponse(res, errors.array());
+  }
+
+  const [feedback] = await db.execute(
+    `SELECT f.rating, f.comment, f.created_at, u.name AS customer_name
+     FROM feedbacks f
+     JOIN users u ON f.customer_id = u.id
+     WHERE f.order_id = ?`,
+    [req.params.id]
+  );
+
+  if (feedback.length === 0) {
+    return errorResponse(res, 'No feedback found', 404);
+  }
+
+  return successResponse(res, { feedback: feedback[0] });
+}));
 
 module.exports = router;
