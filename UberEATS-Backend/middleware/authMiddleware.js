@@ -23,10 +23,11 @@ const verifyToken = async (req, res, next) => {
     const token = authHeader.split(' ')[1].trim();
 
     // Check if token is blacklisted
-    const [blacklisted] = await db.execute(
-      'SELECT id FROM token_blacklist WHERE token = ? AND expires_at > NOW()',
+    const result = await db.query(
+      'SELECT id FROM token_blacklist WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP',
       [token]
     );
+    const blacklisted = result.rows;
 
     if (blacklisted.length > 0) {
       logger.warn('Blacklisted token used', { ip: req.ip, path: req.path });
@@ -131,8 +132,8 @@ const blacklistToken = async (token, userId) => {
     const decoded = jwt.decode(token);
     const expiresAt = new Date(decoded.exp * 1000);
 
-    await db.execute(
-      'INSERT INTO token_blacklist (token, user_id, expires_at) VALUES (?, ?, ?)',
+    await db.query(
+      'INSERT INTO token_blacklist (token, user_id, expires_at) VALUES ($1, $2, $3)',
       [token, userId, expiresAt]
     );
 
@@ -158,10 +159,11 @@ const optionalAuth = async (req, res, next) => {
     const token = authHeader.split(' ')[1].trim();
 
     // Check if token is blacklisted
-    const [blacklisted] = await db.execute(
-      'SELECT id FROM token_blacklist WHERE token = ? AND expires_at > NOW()',
+    const result = await db.query(
+      'SELECT id FROM token_blacklist WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP',
       [token]
     );
+    const blacklisted = result.rows;
 
     if (blacklisted.length > 0) {
       return next();

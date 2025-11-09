@@ -31,13 +31,14 @@ router.post('/', verifyToken, requireCustomer, orderValidation, asyncHandler(asy
 
   // Verify all dishes exist and belong to the restaurant
   const dishIds = items.map(item => item.dishId);
-  const placeholders = dishIds.map(() => '?').join(',');
+  const placeholders = dishIds.map((_, i) => `$${i + 1}`).join(',');
 
-  const [dishes] = await db.execute(
+  const result1 = await db.query(
     `SELECT id, price, restaurant_id, name FROM dishes
-     WHERE id IN (${placeholders}) AND restaurant_id = ?`,
+     WHERE id IN (${placeholders}) AND restaurant_id = $${dishIds.length + 1}`,
     [...dishIds, restaurantId]
   );
+  const dishes = result1.rows;
 
   if (dishes.length !== items.length) {
     return errorResponse(res, 'Some dishes are invalid or not available', 400);
@@ -98,7 +99,8 @@ router.get('/', verifyToken, asyncHandler(async (req, res) => {
   if (role === 'customer') {
     orders = await Order.getByCustomer(id);
   } else if (role === 'restaurant') {
-    const [restaurants] = await db.execute('SELECT id FROM restaurants WHERE user_id = ?', [id]);
+    const result2 = await db.query('SELECT id FROM restaurants WHERE user_id = $1', [id]);
+    const restaurants = result2.rows;
     if (restaurants.length === 0) {
       return errorResponse(res, 'Restaurant profile not found', 404);
     }
@@ -133,7 +135,8 @@ router.get('/:id', verifyToken, idParamValidation, asyncHandler(async (req, res)
   }
 
   if (role === 'restaurant') {
-    const [restaurants] = await db.execute('SELECT id FROM restaurants WHERE user_id = ?', [userId]);
+    const result3 = await db.query('SELECT id FROM restaurants WHERE user_id = $1', [userId]);
+    const restaurants = result3.rows;
     if (restaurants.length === 0 || restaurants[0].id !== order.restaurant_id) {
       return errorResponse(res, 'Access denied', 403);
     }
@@ -166,7 +169,8 @@ router.put('/:id/status', verifyToken, requireRestaurant, idParamValidation, asy
     return errorResponse(res, 'Order not found', 404);
   }
 
-  const [restaurants] = await db.execute('SELECT id FROM restaurants WHERE user_id = ?', [req.user.id]);
+  const result4 = await db.query('SELECT id FROM restaurants WHERE user_id = $1', [req.user.id]);
+  const restaurants = result4.rows;
   if (restaurants.length === 0 || restaurants[0].id !== order.restaurant_id) {
     return errorResponse(res, 'Access denied', 403);
   }
@@ -201,17 +205,18 @@ router.post('/:id/feedback', verifyToken, requireCustomer, idParamValidation, fe
     return errorResponse(res, 'Can only review delivered orders', 400);
   }
 
-  const [existing] = await db.execute(
-    'SELECT id FROM feedbacks WHERE order_id = ? AND customer_id = ?',
+  const result5 = await db.query(
+    'SELECT id FROM feedbacks WHERE order_id = $1 AND customer_id = $2',
     [orderId, customerId]
   );
+  const existing = result5.rows;
 
   if (existing.length > 0) {
     return errorResponse(res, 'Feedback already submitted', 409);
   }
 
-  await db.execute(
-    'INSERT INTO feedbacks (order_id, customer_id, restaurant_id, rating, comment) VALUES (?, ?, ?, ?, ?)',
+  await db.query(
+    'INSERT INTO feedbacks (order_id, customer_id, restaurant_id, rating, comment) VALUES ($1, $2, $3, $4, $5)',
     [orderId, customerId, order.restaurant_id, rating, comment || null]
   );
 
@@ -231,13 +236,14 @@ router.get('/:id/feedback', idParamValidation, asyncHandler(async (req, res) => 
     return validationErrorResponse(res, errors.array());
   }
 
-  const [feedback] = await db.execute(
+  const result6 = await db.query(
     `SELECT f.rating, f.comment, f.created_at, u.name AS customer_name
      FROM feedbacks f
      JOIN users u ON f.customer_id = u.id
-     WHERE f.order_id = ?`,
+     WHERE f.order_id = $1`,
     [req.params.id]
   );
+  const feedback = result6.rows;
 
   if (feedback.length === 0) {
     return errorResponse(res, 'No feedback found', 404);

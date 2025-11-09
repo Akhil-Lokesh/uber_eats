@@ -20,8 +20,8 @@ const router = express.Router();
  */
 const logAdminAction = async (admin_email, action, target_user_id = null) => {
   try {
-    await db.execute(
-      'INSERT INTO admin_logs (admin_email, action, target_user_id) VALUES (?, ?, ?)',
+    await db.query(
+      'INSERT INTO admin_logs (admin_email, action, target_user_id) VALUES ($1, $2, $3)',
       [admin_email, action, target_user_id]
     );
   } catch (error) {
@@ -35,21 +35,29 @@ const logAdminAction = async (admin_email, action, target_user_id = null) => {
  * @access  Private (Admin)
  */
 router.get('/dashboard', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
-  const [totalOrders] = await db.execute('SELECT COUNT(*) AS total_orders FROM orders');
-  const [totalRevenue] = await db.execute('SELECT IFNULL(SUM(total_price), 0) AS total_revenue FROM orders');
-  const [totalUsers] = await db.execute('SELECT COUNT(*) AS total_users FROM users');
-  const [totalRestaurants] = await db.execute('SELECT COUNT(*) AS total_restaurants FROM restaurants');
+  const totalOrdersResult = await db.query('SELECT COUNT(*) AS total_orders FROM orders');
+  const totalOrders = totalOrdersResult.rows;
 
-  const [topRestaurants] = await db.execute(`
+  const totalRevenueResult = await db.query('SELECT COALESCE(SUM(total_price), 0) AS total_revenue FROM orders');
+  const totalRevenue = totalRevenueResult.rows;
+
+  const totalUsersResult = await db.query('SELECT COUNT(*) AS total_users FROM users');
+  const totalUsers = totalUsersResult.rows;
+
+  const totalRestaurantsResult = await db.query('SELECT COUNT(*) AS total_restaurants FROM restaurants');
+  const totalRestaurants = totalRestaurantsResult.rows;
+
+  const topRestaurantsResult = await db.query(`
     SELECT r.name AS restaurant_name, COUNT(o.id) AS order_count, SUM(o.total_price) AS revenue
     FROM orders o
     JOIN restaurants r ON o.restaurant_id = r.id
-    GROUP BY r.id
+    GROUP BY r.id, r.name
     ORDER BY order_count DESC
     LIMIT 5
   `);
+  const topRestaurants = topRestaurantsResult.rows;
 
-  const [recentOrders] = await db.execute(`
+  const recentOrdersResult = await db.query(`
     SELECT o.id, o.status, o.total_price, o.created_at,
            u.name AS customer_name, r.name AS restaurant_name
     FROM orders o
@@ -58,6 +66,7 @@ router.get('/dashboard', verifyToken, requireAdmin, asyncHandler(async (req, res
     ORDER BY o.created_at DESC
     LIMIT 10
   `);
+  const recentOrders = recentOrdersResult.rows;
 
   logger.info('Admin dashboard accessed', { adminEmail: req.user.email });
 
@@ -103,13 +112,14 @@ router.put('/orders/:id', verifyToken, requireSuperAdmin, idParamValidation, asy
     return errorResponse(res, 'Invalid status value', 400);
   }
 
-  const [order] = await db.execute('SELECT id FROM orders WHERE id = ?', [order_id]);
+  const orderResult = await db.query('SELECT id FROM orders WHERE id = $1', [order_id]);
+  const order = orderResult.rows;
 
   if (order.length === 0) {
     return errorResponse(res, 'Order not found', 404);
   }
 
-  await db.execute('UPDATE orders SET status = ? WHERE id = ?', [status, order_id]);
+  await db.query('UPDATE orders SET status = $1 WHERE id = $2', [status, order_id]);
   await logAdminAction(req.user.email, `Updated Order Status to ${status}`, order_id);
 
   logger.info('Order status updated by admin', { adminEmail: req.user.email, orderId: order_id, status });
@@ -130,13 +140,14 @@ router.delete('/orders/:id', verifyToken, requireSuperAdmin, idParamValidation, 
 
   const order_id = req.params.id;
 
-  const [order] = await db.execute('SELECT id FROM orders WHERE id = ?', [order_id]);
+  const orderResult2 = await db.query('SELECT id FROM orders WHERE id = $1', [order_id]);
+  const order = orderResult2.rows;
 
   if (order.length === 0) {
     return errorResponse(res, 'Order not found', 404);
   }
 
-  await db.execute('DELETE FROM orders WHERE id = ?', [order_id]);
+  await db.query('DELETE FROM orders WHERE id = $1', [order_id]);
   await logAdminAction(req.user.email, `Deleted Order`, order_id);
 
   logger.info('Order deleted by admin', { adminEmail: req.user.email, orderId: order_id });
@@ -159,10 +170,11 @@ router.get('/profile', verifyToken, requireAdmin, asyncHandler(async (req, res) 
     return errorResponse(res, 'Access denied - cannot view other admin profiles', 403);
   }
 
-  const [admin] = await db.execute(
-    'SELECT id, email, role, created_at FROM admins WHERE email = ?',
+  const adminResult = await db.query(
+    'SELECT id, email, role, created_at FROM admins WHERE email = $1',
     [targetEmail]
   );
+  const admin = adminResult.rows;
 
   if (admin.length === 0) {
     return errorResponse(res, 'Admin profile not found', 404);
@@ -180,15 +192,17 @@ router.get('/logs', verifyToken, requireSuperAdmin, asyncHandler(async (req, res
   const limit = parseInt(req.query.limit) || 50;
   const offset = parseInt(req.query.offset) || 0;
 
-  const [logs] = await db.execute(
+  const logsResult = await db.query(
     `SELECT id, admin_email, action, target_user_id, timestamp
      FROM admin_logs
      ORDER BY timestamp DESC
-     LIMIT ? OFFSET ?`,
+     LIMIT $1 OFFSET $2`,
     [limit, offset]
   );
+  const logs = logsResult.rows;
 
-  const [total] = await db.execute('SELECT COUNT(*) as count FROM admin_logs');
+  const totalResult = await db.query('SELECT COUNT(*) as count FROM admin_logs');
+  const total = totalResult.rows;
 
   logger.info('Admin logs accessed', { adminEmail: req.user.email });
 
@@ -217,25 +231,28 @@ router.post('/users', verifyToken, requireSuperAdmin, asyncHandler(async (req, r
   }
 
   // Check if user exists
-  const [existing] = await db.execute('SELECT id FROM users WHERE email = ?', [email]);
+  const existingResult = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+  const existing = existingResult.rows;
 
   if (existing.length > 0) {
     return errorResponse(res, 'Email already registered', 409);
   }
 
   const hashedPassword = await bcrypt.hash(password, 12);
-  const [result] = await db.execute(
-    'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
+  const result = await db.query(
+    'INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id',
     [name, email, hashedPassword, role]
   );
 
-  await logAdminAction(req.user.email, `Created new user: ${email}`, result.insertId);
+  const newUserId = result.rows[0].id;
+
+  await logAdminAction(req.user.email, `Created new user: ${email}`, newUserId);
 
   logger.info('User created by admin', { adminEmail: req.user.email, newUserEmail: email, role });
 
   return successResponse(res, {
     user: {
-      id: result.insertId,
+      id: newUserId,
       name,
       email,
       role
@@ -255,17 +272,21 @@ router.get('/users', verifyToken, requireSuperAdmin, asyncHandler(async (req, re
 
   let query = 'SELECT id, name, email, role, created_at FROM users WHERE 1=1';
   const params = [];
+  let paramIndex = 1;
 
   if (role && ['customer', 'restaurant'].includes(role)) {
-    query += ' AND role = ?';
+    query += ` AND role = $${paramIndex++}`;
     params.push(role);
   }
 
-  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
   params.push(limit, offset);
 
-  const [users] = await db.execute(query, params);
-  const [total] = await db.execute('SELECT COUNT(*) as count FROM users');
+  const usersResult = await db.query(query, params);
+  const users = usersResult.rows;
+
+  const totalResult2 = await db.query('SELECT COUNT(*) as count FROM users');
+  const total = totalResult2.rows;
 
   return successResponse(res, {
     users,

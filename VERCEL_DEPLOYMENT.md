@@ -20,8 +20,8 @@ Since Vercel is optimized for frontend deployments, we'll use this architecture:
 └─────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────┐
-│  Database (PlanetScale/Railway)                         │
-│  - MySQL Database                                       │
+│  Database (Supabase/Neon/Railway)                       │
+│  - PostgreSQL Database                                  │
 │  - Automated backups                                    │
 │  - Scaling support                                      │
 └─────────────────────────────────────────────────────────┘
@@ -37,47 +37,58 @@ This is the **easiest and recommended** approach for your Express app.
 
 ---
 
-## 📦 Part 1: Deploy Database (PlanetScale - Free Tier)
+## 📦 Part 1: Deploy Database (Supabase - Free Tier)
 
-### 1. Create PlanetScale Account
+### Option A: Supabase (Recommended)
+
+### 1. Create Supabase Account
 
 ```bash
-# Visit https://planetscale.com and sign up (free tier available)
+# Visit https://supabase.com and sign up (free tier available)
 ```
 
 ### 2. Create Database
 
-1. Click "Create Database"
+1. Click "New Project"
 2. Name: `ubereats-production`
-3. Region: Choose closest to your users
-4. Click "Create database"
+3. Database Password: Create a strong password (save it!)
+4. Region: Choose closest to your users
+5. Click "Create new project"
 
 ### 3. Get Connection String
 
-1. Go to your database → "Connect"
-2. Select "Node.js"
+1. Go to Project Settings → Database
+2. Under "Connection String" → "URI"
 3. Copy the connection string (looks like):
    ```
-   mysql://username:password@host/database?ssl={"rejectUnauthorized":true}
+   postgresql://postgres:password@db.xxxxxxxxxxxx.supabase.co:5432/postgres
    ```
 
 ### 4. Run Migrations
 
 ```bash
-# On your local machine, set PlanetScale connection
+# On your local machine, set Supabase connection
 cd /home/user/uber_eats/UberEATS-Backend
 
 # Create temporary .env for migration
-cat > .env.planetscale << 'EOF'
-DB_HOST=your-host.psdb.cloud
-DB_USER=your-username
-DB_PASSWORD=your-password
-DB_NAME=ubereats-production
+cat > .env.production << 'EOF'
+DB_HOST=db.xxxxxxxxxxxx.supabase.co
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=your-password-here
+DB_NAME=postgres
 EOF
 
 # Run migrations
 node database/migrate.js
 ```
+
+### Option B: Neon (Alternative)
+
+1. Visit https://neon.tech
+2. Create new project
+3. Get connection string from dashboard
+4. Update migration script with Neon credentials
 
 ---
 
@@ -110,11 +121,12 @@ railway login
 Click "Variables" and add:
 
 ```env
-# Database (from PlanetScale)
-DB_HOST=your-planetscale-host.psdb.cloud
-DB_USER=your-planetscale-user
-DB_PASSWORD=your-planetscale-password
-DB_NAME=ubereats-production
+# Database (from Supabase/Neon)
+DB_HOST=db.xxxxxxxxxxxx.supabase.co
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=your-database-password
+DB_NAME=postgres
 
 # Server
 PORT=5000
@@ -334,10 +346,17 @@ railway logs
 - ✅ ~500 hours runtime/month
 - ✅ Vertical scaling
 
-### PlanetScale (Free Hobby Tier)
-- ✅ 5 GB storage
-- ✅ 1 billion row reads/month
-- ✅ 10 million row writes/month
+### Supabase (Free Tier)
+- ✅ 500 MB database storage
+- ✅ 2 GB bandwidth
+- ✅ 50,000 monthly active users
+- ✅ 500 MB file storage
+
+### Neon (Free Tier - Alternative)
+- ✅ 3 GB storage
+- ✅ 1 active project
+- ✅ Unlimited queries
+- ✅ 100 hours compute/month
 
 **Estimated Cost:** $0/month for low-medium traffic
 
@@ -396,9 +415,10 @@ If you want **everything on Vercel**, you can convert your Express app to server
 ### Database Connection Failed
 
 ```bash
-# Verify PlanetScale connection string
+# Verify Supabase/Neon connection string
 # Check if migrations ran successfully
-# Ensure SSL is enabled in connection
+# Ensure SSL/TLS is enabled in connection
+# Check DB_PORT is set to 5432
 ```
 
 ### Build Failed on Vercel
@@ -433,10 +453,10 @@ vercel logs https://your-app.vercel.app
 railway logs --tail
 ```
 
-### PlanetScale Insights
-- Database → Insights tab
-- View query performance
-- Monitor slow queries
+### Database Monitoring
+- **Supabase**: Database → Logs & Reports
+- **Neon**: Monitoring dashboard for query performance
+- View connection stats and slow queries
 
 ---
 
@@ -459,7 +479,8 @@ git push
 
 **Vercel:** https://vercel.com/docs
 **Railway:** https://docs.railway.app
-**PlanetScale:** https://planetscale.com/docs
+**Supabase:** https://supabase.com/docs
+**Neon:** https://neon.tech/docs
 
 ---
 
@@ -469,7 +490,7 @@ After deployment, you'll have:
 
 - **Frontend:** `https://uber-eats-yourdomain.vercel.app`
 - **Backend:** `https://ubereats-backend.up.railway.app`
-- **Database:** `your-db.psdb.cloud`
+- **Database:** `db.xxxxxxxxxxxx.supabase.co` (or Neon/Railway PostgreSQL)
 
 **🎉 Deployment Complete!**
 

@@ -5,29 +5,52 @@
 
 const fs = require('fs');
 const path = require('path');
-const mysql = require('mysql2/promise');
+const { Client } = require('pg');
 require('dotenv').config();
 
 const runMigrations = async () => {
-  let connection;
+  let client;
+  let dbClient;
 
   try {
-    // Create connection
-    connection = await mysql.createConnection({
+    // First, connect to the default postgres database to create our database
+    client = new Client({
       host: process.env.DB_HOST || 'localhost',
-      user: process.env.DB_USER || 'root',
+      port: process.env.DB_PORT || 5432,
+      user: process.env.DB_USER || 'postgres',
       password: process.env.DB_PASSWORD || '',
-      multipleStatements: true
+      database: 'postgres' // Connect to default database
     });
 
-    console.log('✅ Connected to MySQL');
+    await client.connect();
+    console.log('✅ Connected to PostgreSQL');
 
     // Create database if it doesn't exist
-    await connection.query(`CREATE DATABASE IF NOT EXISTS ${process.env.DB_NAME || 'ubereats'}`);
-    console.log(`✅ Database '${process.env.DB_NAME || 'ubereats'}' ready`);
+    const dbName = process.env.DB_NAME || 'ubereats';
+    try {
+      await client.query(`CREATE DATABASE ${dbName}`);
+      console.log(`✅ Database '${dbName}' created`);
+    } catch (error) {
+      if (error.code === '42P04') {
+        console.log(`✅ Database '${dbName}' already exists`);
+      } else {
+        throw error;
+      }
+    }
 
-    // Use the database
-    await connection.query(`USE ${process.env.DB_NAME || 'ubereats'}`);
+    await client.end();
+
+    // Now connect to our target database
+    dbClient = new Client({
+      host: process.env.DB_HOST || 'localhost',
+      port: process.env.DB_PORT || 5432,
+      user: process.env.DB_USER || 'postgres',
+      password: process.env.DB_PASSWORD || '',
+      database: dbName
+    });
+
+    await dbClient.connect();
+    console.log(`✅ Connected to database '${dbName}'`);
 
     // Get all migration files
     const migrationsDir = path.join(__dirname, 'migrations');
@@ -45,7 +68,7 @@ const runMigrations = async () => {
       console.log(`⏳ Running: ${file}...`);
 
       try {
-        await connection.query(sql);
+        await dbClient.query(sql);
         console.log(`✅ Completed: ${file}\n`);
       } catch (error) {
         console.error(`❌ Error in ${file}:`, error.message);
@@ -59,8 +82,11 @@ const runMigrations = async () => {
     console.error('❌ Migration failed:', error);
     process.exit(1);
   } finally {
-    if (connection) {
-      await connection.end();
+    if (dbClient) {
+      await dbClient.end();
+    }
+    if (client) {
+      await client.end();
     }
   }
 };

@@ -21,19 +21,21 @@ const router = express.Router();
  * @access  Private (Restaurant)
  */
 router.get('/profile', verifyToken, requireRestaurant, asyncHandler(async (req, res) => {
-  const [restaurants] = await db.execute(
-    'SELECT id FROM restaurants WHERE user_id = ?',
+  const restaurantsResult = await db.query(
+    'SELECT id FROM restaurants WHERE user_id = $1',
     [req.user.id]
   );
+  const restaurants = restaurantsResult.rows;
 
   if (restaurants.length === 0) {
     return errorResponse(res, 'Restaurant profile not found', 404);
   }
 
-  const [profile] = await db.execute(
-    'SELECT id, name, email, location, phone, cuisine, description, image, rating, total_reviews, created_at FROM restaurants WHERE id = ?',
+  const profileResult = await db.query(
+    'SELECT id, name, email, location, phone, cuisine, description, image, rating, total_reviews, created_at FROM restaurants WHERE id = $1',
     [restaurants[0].id]
   );
+  const profile = profileResult.rows;
 
   return successResponse(res, { restaurant: profile[0] });
 }));
@@ -50,17 +52,18 @@ router.put('/profile', verifyToken, requireRestaurant, asyncHandler(async (req, 
     return errorResponse(res, 'All fields are required', 400);
   }
 
-  const [restaurants] = await db.execute(
-    'SELECT id FROM restaurants WHERE user_id = ?',
+  const restaurantsResult2 = await db.query(
+    'SELECT id FROM restaurants WHERE user_id = $1',
     [req.user.id]
   );
+  const restaurants = restaurantsResult2.rows;
 
   if (restaurants.length === 0) {
     return errorResponse(res, 'Restaurant profile not found', 404);
   }
 
-  await db.execute(
-    'UPDATE restaurants SET name=?, location=?, phone=?, cuisine=?, description=? WHERE id=?',
+  await db.query(
+    'UPDATE restaurants SET name=$1, location=$2, phone=$3, cuisine=$4, description=$5 WHERE id=$6',
     [name, location, phone, cuisine, description || null, restaurants[0].id]
   );
 
@@ -82,10 +85,11 @@ router.post('/dishes', verifyToken, requireRestaurant, dishValidation, asyncHand
 
   const { name, description, price, category, image } = req.body;
 
-  const [restaurants] = await db.execute(
-    'SELECT id FROM restaurants WHERE user_id = ?',
+  const restaurantsResult3 = await db.query(
+    'SELECT id FROM restaurants WHERE user_id = $1',
     [req.user.id]
   );
+  const restaurants = restaurantsResult3.rows;
 
   if (restaurants.length === 0) {
     return errorResponse(res, 'Restaurant profile not found', 404);
@@ -104,10 +108,11 @@ router.post('/dishes', verifyToken, requireRestaurant, dishValidation, asyncHand
  * @access  Private (Restaurant)
  */
 router.get('/dishes', verifyToken, requireRestaurant, asyncHandler(async (req, res) => {
-  const [restaurants] = await db.execute(
-    'SELECT id FROM restaurants WHERE user_id = ?',
+  const restaurantsResult4 = await db.query(
+    'SELECT id FROM restaurants WHERE user_id = $1',
     [req.user.id]
   );
+  const restaurants = restaurantsResult4.rows;
 
   if (restaurants.length === 0) {
     return errorResponse(res, 'Restaurant profile not found', 404);
@@ -131,20 +136,22 @@ router.put('/dishes/:id', verifyToken, requireRestaurant, idParamValidation, dis
 
   const { name, description, price, category, image } = req.body;
 
-  const [restaurants] = await db.execute(
-    'SELECT id FROM restaurants WHERE user_id = ?',
+  const restaurantsResult5 = await db.query(
+    'SELECT id FROM restaurants WHERE user_id = $1',
     [req.user.id]
   );
+  const restaurants = restaurantsResult5.rows;
 
   if (restaurants.length === 0) {
     return errorResponse(res, 'Restaurant profile not found', 404);
   }
 
   // Verify dish belongs to this restaurant
-  const [dishes] = await db.execute(
-    'SELECT id FROM dishes WHERE id = ? AND restaurant_id = ?',
+  const dishesResult = await db.query(
+    'SELECT id FROM dishes WHERE id = $1 AND restaurant_id = $2',
     [req.params.id, restaurants[0].id]
   );
+  const dishes = dishesResult.rows;
 
   if (dishes.length === 0) {
     return errorResponse(res, 'Dish not found or access denied', 404);
@@ -168,19 +175,21 @@ router.delete('/dishes/:id', verifyToken, requireRestaurant, idParamValidation, 
     return validationErrorResponse(res, errors.array());
   }
 
-  const [restaurants] = await db.execute(
-    'SELECT id FROM restaurants WHERE user_id = ?',
+  const restaurantsResult6 = await db.query(
+    'SELECT id FROM restaurants WHERE user_id = $1',
     [req.user.id]
   );
+  const restaurants = restaurantsResult6.rows;
 
   if (restaurants.length === 0) {
     return errorResponse(res, 'Restaurant profile not found', 404);
   }
 
-  const [dishes] = await db.execute(
-    'SELECT id FROM dishes WHERE id = ? AND restaurant_id = ?',
+  const dishesResult2 = await db.query(
+    'SELECT id FROM dishes WHERE id = $1 AND restaurant_id = $2',
     [req.params.id, restaurants[0].id]
   );
+  const dishes = dishesResult2.rows;
 
   if (dishes.length === 0) {
     return errorResponse(res, 'Dish not found or access denied', 404);
@@ -204,14 +213,15 @@ router.get('/:id/rating', idParamValidation, asyncHandler(async (req, res) => {
     return validationErrorResponse(res, errors.array());
   }
 
-  const [ratings] = await db.execute(
-    `SELECT 
-      IFNULL(AVG(rating), 0) AS average_rating,
+  const ratingsResult = await db.query(
+    `SELECT
+      COALESCE(AVG(rating), 0) AS average_rating,
       COUNT(*) AS total_reviews
      FROM feedbacks
-     WHERE restaurant_id = ?`,
+     WHERE restaurant_id = $1`,
     [req.params.id]
   );
+  const ratings = ratingsResult.rows;
 
   return successResponse(res, {
     restaurant_id: parseInt(req.params.id),
@@ -231,10 +241,11 @@ router.get('/:id', optionalAuth, idParamValidation, asyncHandler(async (req, res
     return validationErrorResponse(res, errors.array());
   }
 
-  const [restaurants] = await db.execute(
-    'SELECT id, name, email, location, phone, cuisine, description, image, rating, total_reviews FROM restaurants WHERE id = ?',
+  const restaurantsResult7 = await db.query(
+    'SELECT id, name, email, location, phone, cuisine, description, image, rating, total_reviews FROM restaurants WHERE id = $1',
     [req.params.id]
   );
+  const restaurants = restaurantsResult7.rows;
 
   if (restaurants.length === 0) {
     return errorResponse(res, 'Restaurant not found', 404);
@@ -258,22 +269,24 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 
   let query = 'SELECT id, name, location, phone, cuisine, description, image, rating, total_reviews FROM restaurants WHERE 1=1';
   const params = [];
+  let paramIndex = 1;
 
   if (cuisine) {
-    query += ' AND cuisine = ?';
+    query += ` AND cuisine = $${paramIndex++}`;
     params.push(cuisine);
   }
 
   if (search) {
-    query += ' AND (name LIKE ? OR description LIKE ? OR cuisine LIKE ?)';
     const searchTerm = `%${search}%`;
+    query += ` AND (name LIKE $${paramIndex++} OR description LIKE $${paramIndex++} OR cuisine LIKE $${paramIndex++})`;
     params.push(searchTerm, searchTerm, searchTerm);
   }
 
-  query += ' ORDER BY rating DESC, total_reviews DESC LIMIT ? OFFSET ?';
+  query += ` ORDER BY rating DESC, total_reviews DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
   params.push(parseInt(limit), parseInt(offset));
 
-  const [restaurants] = await db.execute(query, params);
+  const restaurantsResult8 = await db.query(query, params);
+  const restaurants = restaurantsResult8.rows;
 
   return successResponse(res, { restaurants, count: restaurants.length });
 }));

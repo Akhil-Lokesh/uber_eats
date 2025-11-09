@@ -43,28 +43,31 @@ router.post('/signup', signupLimiter, signupValidation, asyncHandler(async (req,
 
   const { name, email, password, role } = req.body;
 
-  const [existing] = await db.execute('SELECT id FROM users WHERE email = ?', [email]);
+  const result1 = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+  const existing = result1.rows;
   if (existing.length > 0) {
     return errorResponse(res, 'Email already registered', 409);
   }
 
   const hashedPassword = await bcrypt.hash(password, 12);
-  const [result] = await db.execute(
-    'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
+  const result = await db.query(
+    'INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id',
     [name, email, hashedPassword, role]
   );
 
+  const userId = result.rows[0].id;
+
   const token = jwt.sign(
-    { id: result.insertId, email, role },
+    { id: userId, email, role },
     process.env.JWT_SECRET || 'supersecretkey',
     { expiresIn: process.env.JWT_EXPIRATION || '24h' }
   );
 
-  logger.info('New user registered', { userId: result.insertId, role });
+  logger.info('New user registered', { userId, role });
 
   return successResponse(res, {
     token,
-    user: { id: result.insertId, name, email, role }
+    user: { id: userId, name, email, role }
   }, 'User registered successfully', 201);
 }));
 
@@ -81,10 +84,11 @@ router.post('/login', loginLimiter, loginValidation, asyncHandler(async (req, re
 
   const { email, password } = req.body;
 
-  const [users] = await db.execute(
-    'SELECT id, name, email, password, role FROM users WHERE email = ?',
+  const result2 = await db.query(
+    'SELECT id, name, email, password, role FROM users WHERE email = $1',
     [email]
   );
+  const users = result2.rows;
 
   if (users.length === 0 || !(await bcrypt.compare(password, users[0].password))) {
     return errorResponse(res, 'Invalid email or password', 401);
@@ -118,10 +122,11 @@ router.post('/admin-login', loginLimiter, loginValidation, asyncHandler(async (r
 
   const { email, password } = req.body;
 
-  const [admins] = await db.execute(
-    'SELECT id, email, password, role FROM admins WHERE email = ?',
+  const result3 = await db.query(
+    'SELECT id, email, password, role FROM admins WHERE email = $1',
     [email]
   );
+  const admins = result3.rows;
 
   if (admins.length === 0 || !(await bcrypt.compare(password, admins[0].password))) {
     return errorResponse(res, 'Invalid email or password', 401);
@@ -152,10 +157,11 @@ router.get('/current-user', verifyToken, asyncHandler(async (req, res) => {
   const isAdmin = ['admin', 'super_admin'].includes(role);
   
   const query = isAdmin
-    ? 'SELECT id, email, role FROM admins WHERE id = ?'
-    : 'SELECT id, name, email, role FROM users WHERE id = ?';
+    ? 'SELECT id, email, role FROM admins WHERE id = $1'
+    : 'SELECT id, name, email, role FROM users WHERE id = $1';
 
-  const [users] = await db.execute(query, [id]);
+  const result4 = await db.query(query, [id]);
+  const users = result4.rows;
 
   if (users.length === 0) {
     return errorResponse(res, 'User not found', 404);
