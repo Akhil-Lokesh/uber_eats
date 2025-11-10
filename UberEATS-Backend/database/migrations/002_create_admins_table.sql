@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS admins (
 CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email);
 CREATE INDEX IF NOT EXISTS idx_admins_role ON admins(role);
 
--- Insert default super admin (password: Admin@123)
+-- Insert default super admin (password: Admin@123456)
+-- ⚠️ IMPORTANT: Change this password immediately after first deployment!
 INSERT INTO admins (email, password, role) VALUES
-('admin@ubereats.com', '$2a$10$YourHashedPasswordHere', 'super_admin')
+('admin@ubereats.com', '$2b$12$zC4xXfftSur.9Wv.gQs7zOlsaJ/70yFhP9bohZ64OaxksuKArD4yK', 'super_admin')
 ON CONFLICT (email) DO NOTHING;

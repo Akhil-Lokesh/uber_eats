@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const logger = require("../utils/logger");
 
 class CustomerProfile {
   // Create a new customer profile
@@ -7,7 +8,11 @@ class CustomerProfile {
       const query = "INSERT INTO customer_profiles (user_id) VALUES ($1)";
       await db.query(query, [user_id]);
     } catch (error) {
-      console.error("Error creating profile:", error);
+      logger.error("Error creating customer profile", {
+        error: error.message,
+        stack: error.stack,
+        user_id
+      });
       throw error;
     }
   }
@@ -20,7 +25,11 @@ class CustomerProfile {
       const rows = result.rows;
       return rows.length > 0 ? rows[0] : null;
     } catch (error) {
-      console.error("Error fetching profile:", error);
+      logger.error("Error fetching customer profile", {
+        error: error.message,
+        stack: error.stack,
+        user_id
+      });
       throw error;
     }
   }
@@ -34,7 +43,11 @@ class CustomerProfile {
 
       return result.rowCount > 0; // Returns true if update was successful
     } catch (error) {
-      console.error("Error updating profile:", error);
+      logger.error("Error updating customer profile", {
+        error: error.message,
+        stack: error.stack,
+        user_id
+      });
       throw error;
     }
   }
@@ -48,7 +61,12 @@ class CustomerProfile {
 
       return result.rowCount > 0; // Returns true if update was successful
     } catch (error) {
-      console.error("Error updating profile picture:", error);
+      logger.error("Error updating profile picture", {
+        error: error.message,
+        stack: error.stack,
+        user_id,
+        profile_picture
+      });
       throw error;
     }
   }
