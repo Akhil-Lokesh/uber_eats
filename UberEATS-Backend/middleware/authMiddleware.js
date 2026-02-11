@@ -1,101 +1,196 @@
-const jwt = require("jsonwebtoken");
-const dotenv = require("dotenv");
+/**
+ * Enhanced Authentication Middleware
+ * JWT-based authentication with persistent token blacklist
+ */
 
-dotenv.config();
-
-// ✅ In-memory store for blacklisted tokens
-const blacklistedTokens = new Set();
+const jwt = require('jsonwebtoken');
+const db = require('../config/db');
+const logger = require('../utils/logger');
+const { unauthorizedResponse, forbiddenResponse } = require('../utils/responseFormatter');
 
 /**
- * ✅ Middleware to verify JWT Token and check if it's blacklisted
+ * Verify JWT token and check blacklist
  */
-const verifyToken = (req, res, next) => {
-    try {
-        const authHeader = req.headers.authorization;
-        console.log("🔹 Received Authorization Header:", authHeader);
+const verifyToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
 
-        if (!authHeader || !authHeader.startsWith("Bearer ")) {
-            console.log("❌ No valid token provided!");
-            return res.status(401).json({ error: "Unauthorized: No token provided!" });
-        }
-
-        const token = authHeader.split(" ")[1].trim();
-        console.log("🔹 Extracted Token:", token);
-
-        // ✅ Debug: Print the current blacklisted tokens
-        console.log("🛑 Current Blacklisted Tokens:", Array.from(blacklistedTokens));
-
-        // ✅ Ensure the token is blacklisted before proceeding
-        if (blacklistedTokens.has(token)) {
-            console.log("❌ Attempt to use a blacklisted token.");
-            return res.status(403).json({ error: "Forbidden: Token is invalid or expired!" });
-        }
-
-        // ✅ Verify JWT token
-        let decoded;
-        try {
-            decoded = jwt.verify(token, process.env.JWT_SECRET || "supersecretkey");
-        } catch (error) {
-            console.error("❌ Token Verification Failed:", error.message);
-            return res.status(403).json({ error: "Forbidden: Invalid or expired token!" });
-        }
-
-        console.log("✅ Token Decoded Successfully:", decoded);
-
-        // ✅ Attach user details to request
-        req.user = decoded;
-        next();
-    } catch (error) {
-        console.error("❌ Unexpected Error in Token Verification:", error.message);
-        return res.status(500).json({ error: "Server error!" });
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      logger.warn('No token provided', { ip: req.ip, path: req.path });
+      return unauthorizedResponse(res, 'No token provided');
     }
+
+    const token = authHeader.split(' ')[1].trim();
+
+    // Check if token is blacklisted
+    const result = await db.query(
+      'SELECT id FROM token_blacklist WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP',
+      [token]
+    );
+    const blacklisted = result.rows;
+
+    if (blacklisted.length > 0) {
+      logger.warn('Blacklisted token used', { ip: req.ip, path: req.path });
+      return forbiddenResponse(res, 'Token has been invalidated');
+    }
+
+    // Verify JWT
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+
+      // Attach user and token to request
+      req.user = decoded;
+      req.token = token;
+
+      logger.info('Token verified successfully', {
+        userId: decoded.id,
+        role: decoded.role
+      });
+
+      next();
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        logger.warn('Expired token used', { ip: req.ip });
+        return unauthorizedResponse(res, 'Token has expired');
+      }
+
+      logger.error('Invalid token', { error: error.message });
+      return forbiddenResponse(res, 'Invalid token');
+    }
+  } catch (error) {
+    logger.error('Token verification error', { error: error.message });
+    return res.status(500).json({ success: false, message: 'Server error during authentication' });
+  }
 };
 
 /**
- * ✅ Middleware to restrict access to Super Admin only
+ * Require customer role
+ */
+const requireCustomer = (req, res, next) => {
+  if (!req.user || req.user.role !== 'customer') {
+    logger.warn('Non-customer access attempt', {
+      userId: req.user ? req.user.id : 'unknown',
+      role: req.user ? req.user.role : 'unknown',
+      path: req.path
+    });
+    return forbiddenResponse(res, 'Access restricted to customers only');
+  }
+  next();
+};
+
+/**
+ * Require restaurant role
+ */
+const requireRestaurant = (req, res, next) => {
+  if (!req.user || req.user.role !== 'restaurant') {
+    logger.warn('Non-restaurant access attempt', {
+      userId: req.user ? req.user.id : 'unknown',
+      role: req.user ? req.user.role : 'unknown',
+      path: req.path
+    });
+    return forbiddenResponse(res, 'Access restricted to restaurants only');
+  }
+  next();
+};
+
+/**
+ * Require admin role
+ */
+const requireAdmin = (req, res, next) => {
+  if (!req.user || !['admin', 'super_admin'].includes(req.user.role)) {
+    logger.warn('Non-admin access attempt', {
+      userId: req.user ? req.user.id : 'unknown',
+      role: req.user ? req.user.role : 'unknown',
+      path: req.path
+    });
+    return forbiddenResponse(res, 'Access restricted to administrators only');
+  }
+  next();
+};
+
+/**
+ * Require super admin role
  */
 const requireSuperAdmin = (req, res, next) => {
-    console.log("🔹 Checking Super Admin Access...");
-
-    if (!req.user || req.user.role !== "super_admin") {
-        console.log("❌ Unauthorized Role Attempt:", req.user ? req.user.role : "Unknown");
-        return res.status(403).json({ error: "Forbidden: Only super admins can perform this action!" });
-    }
-
-    console.log("✅ Access Granted: Super Admin");
-    next();
+  if (!req.user || req.user.role !== 'super_admin') {
+    logger.warn('Non-super-admin access attempt', {
+      userId: req.user ? req.user.id : 'unknown',
+      role: req.user ? req.user.role : 'unknown',
+      path: req.path
+    });
+    return forbiddenResponse(res, 'Access restricted to super administrators only');
+  }
+  next();
 };
 
 /**
- * ✅ Logout route - Blacklist token
+ * Blacklist a token
  */
-const logout = (req, res) => {
-    try {
-        const authHeader = req.headers.authorization;
+const blacklistToken = async (token, userId) => {
+  try {
+    // Decode to get expiry time
+    const decoded = jwt.decode(token);
+    const expiresAt = new Date(decoded.exp * 1000);
 
-        if (!authHeader || !authHeader.startsWith("Bearer ")) {
-            return res.status(401).json({ error: "Unauthorized: No token provided!" });
-        }
+    await db.query(
+      'INSERT INTO token_blacklist (token, user_id, expires_at) VALUES ($1, $2, $3)',
+      [token, userId, expiresAt]
+    );
 
-        const token = authHeader.split(" ")[1];
-
-        // ✅ Add token to blacklist
-        blacklistedTokens.add(token);
-        console.log(`🔹 Token blacklisted: ${token}`);
-
-        res.json({ message: "Logout successful! Token invalidated." });
-    } catch (error) {
-        console.error("❌ Logout Failed:", error.message);
-        res.status(500).json({ error: "Server error!" });
-    }
+    logger.info('Token blacklisted', { userId, expiresAt });
+    return true;
+  } catch (error) {
+    logger.error('Failed to blacklist token', { error: error.message, userId });
+    throw error;
+  }
 };
 
-// ✅ Function to check if a token is blacklisted (for debugging)
-const isTokenBlacklisted = (token) => blacklistedTokens.has(token);
+/**
+ * Optional authentication (doesn't fail if no token)
+ */
+const optionalAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return next();
+    }
+
+    const token = authHeader.split(' ')[1].trim();
+
+    // Check if token is blacklisted
+    const result = await db.query(
+      'SELECT id FROM token_blacklist WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP',
+      [token]
+    );
+    const blacklisted = result.rows;
+
+    if (blacklisted.length > 0) {
+      return next();
+    }
+
+    // Verify JWT
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+      req.user = decoded;
+      req.token = token;
+    } catch (error) {
+      // Invalid/expired token, but we don't fail - just continue without auth
+    }
+
+    next();
+  } catch (error) {
+    logger.error('Optional auth error', { error: error.message });
+    next();
+  }
+};
 
 module.exports = {
-    verifyToken,
-    requireSuperAdmin,
-    logout,
-    isTokenBlacklisted
+  verifyToken,
+  requireCustomer,
+  requireRestaurant,
+  requireAdmin,
+  requireSuperAdmin,
+  blacklistToken,
+  optionalAuth
 };

@@ -1,18 +1,25 @@
 import axios from 'axios';
 
-// Create an axios instance with default configurations
+// Create axios instance with configuration
 const API = axios.create({
-  baseURL: 'http://localhost:3001/api', // Backend server URL
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5000/api',
   headers: {
     'Content-Type': 'application/json',
   },
-  withCredentials: true, // Important for session-based auth
+  withCredentials: true,
+  timeout: 15000 // 15 second timeout
 });
 
-// Add a request interceptor to include auth token if available
+// Request interceptor - Add auth token
 API.interceptors.request.use(
   (config) => {
-    // You could add token logic here if needed
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken');
+
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+
     return config;
   },
   (error) => {
@@ -20,17 +27,56 @@ API.interceptors.request.use(
   }
 );
 
-// Add a response interceptor to handle errors globally
+// Response interceptor - Handle errors globally
 API.interceptors.response.use(
   (response) => {
     return response;
   },
   (error) => {
-    // Handle session expiration or auth errors
-    if (error.response && error.response.status === 401) {
-      // Redirect to login or handle auth error
-      window.location.href = '/login';
+    // Handle specific error cases
+    if (error.response) {
+      const { status, data } = error.response;
+
+      switch (status) {
+        case 401:
+          // Unauthorized - clear token and redirect to login
+          localStorage.removeItem('authToken');
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
+          break;
+
+        case 403:
+          // Forbidden - show error message
+          console.error('Access forbidden:', data.message);
+          break;
+
+        case 404:
+          // Not found
+          console.error('Resource not found:', data.message);
+          break;
+
+        case 422:
+          // Validation error
+          console.error('Validation error:', data.errors);
+          break;
+
+        case 500:
+          // Server error
+          console.error('Server error:', data.message);
+          break;
+
+        default:
+          console.error('API error:', data.message);
+      }
+    } else if (error.request) {
+      // Request made but no response
+      console.error('Network error: No response from server');
+    } else {
+      // Something else happened
+      console.error('Error:', error.message);
     }
+
     return Promise.reject(error);
   }
 );
